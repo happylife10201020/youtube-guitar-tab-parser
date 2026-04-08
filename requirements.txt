@@ -1,4 +1,4 @@
 opencv-python
 numpy
-Pillow
+Pillow==10.4.0
 yt-dlp
