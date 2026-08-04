@@ -10,7 +10,7 @@ YouTube 기타 타브(악보) 영상을 받아서, 스크롤되는 화면에서 
 
 ### Windows
 
-1. **`dist\GuitarTabParser.exe`** 를 받아서 더블클릭합니다.
+1. **[Releases 페이지](https://github.com/happylife10201020/youtube-guitar-tab-parser/releases/latest)** 에서 `GuitarTabParser-windows.zip` 을 받아 압축을 풀고, `GuitarTabParser.exe` 를 더블클릭합니다.
    - 처음 실행하면 파란 창(“Windows의 PC 보호”)이 뜰 수 있어요. 서명 안 된 개인 프로그램이라 뜨는 정상적인 경고입니다.
      **[추가 정보]** → **[실행]** 을 누르면 됩니다.
 2. 창이 뜨면 **YouTube 주소**를 붙여넣습니다.
