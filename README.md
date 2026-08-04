@@ -22,6 +22,18 @@ YouTube 기타 타브 영상에서 악보 부분만 잘라내어 한 장의 PDF�
 2. `GuitarTabParser.app`을 실행한다. "확인되지 않은 개발자" 경고가 뜨면 앱을 control-클릭 후 열기를 선택한다.
 3. 이후 사용법은 Windows와 같다.
 
+### 화면 예시
+
+앱을 실행하면 다음과 같은 순서로 진행된다.
+
+| 1. 대기 화면 | 2. 다운로드 중 |
+|---|---|
+| ![대기 화면](assets/screenshots/01-ready.png) | ![다운로드 중](assets/screenshots/02-downloading.png) |
+
+| 3. 악보 영역 지정 | 4. 완료 |
+|---|---|
+| ![악보 영역 지정](assets/screenshots/03-select-region.png) | ![완료](assets/screenshots/04-done.png) |
+
 ---
 
 ## 기능
