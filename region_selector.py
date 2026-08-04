@@ -1,5 +1,6 @@
 import cv2
 import time
+from cv_io import imread
 
 drawing = False 
 ix, iy = -1, -1
@@ -24,7 +25,7 @@ def draw_rectangle(event, x, y, flags, param):
 
 def prompt_coords(image_path):
     print("Select the rectangle in the image that contains the tablature")
-    image = cv2.imread(image_path)
+    image = imread(image_path)
     if image is None:
         raise ValueError("Image not found or unable to load.")
     
@@ -39,5 +40,8 @@ def prompt_coords(image_path):
             break
 
     cv2.destroyAllWindows()
-    return (iy, ix, ey, ex)
+    # Normalize so a right-to-left / bottom-to-top drag still gives a valid box.
+    top, bottom = sorted((iy, ey))
+    left, right = sorted((ix, ex))
+    return (top, left, bottom, right)
 

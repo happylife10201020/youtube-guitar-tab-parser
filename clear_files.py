@@ -20,6 +20,8 @@ def clear_directory(directory_path):
 
 def clear_all(image_directory):
     clear_directory(image_directory)
-    os.makedirs(image_directory + "/frames")
-    os.makedirs(image_directory + "/tabs")
+    # exist_ok so a leftover 'frames'/'tabs' (e.g. one clear_directory could not
+    # remove) never crashes with "file already exists".
+    os.makedirs(os.path.join(image_directory, "frames"), exist_ok=True)
+    os.makedirs(os.path.join(image_directory, "tabs"), exist_ok=True)
 

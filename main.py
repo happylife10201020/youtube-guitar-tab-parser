@@ -9,6 +9,9 @@ def main():
     parser = argparse.ArgumentParser(description='YouTube Guitar Tab Parser')
     parser.add_argument('url', help='The YouTube URL to parse.')
     parser.add_argument('output_dir', nargs='?', default='output', help='The directory to save the output files.')
+    parser.add_argument('--overlap', type=float, default=None,
+                        help='Fraction (0-1) of each line the video repeats from the previous line, '
+                             'trimmed from the PDF. Omit to auto-detect, use 0 to disable trimming.')
     args = parser.parse_args()
 
     main_directory = args.output_dir
@@ -20,7 +23,7 @@ def main():
     clear_all(main_directory)
     download(main_directory, youtube_url)
     extract_tab(main_directory)
-    make_pdf(main_directory)
+    make_pdf(main_directory, overlap_fraction=args.overlap)
 
 if __name__ == '__main__':
     main()

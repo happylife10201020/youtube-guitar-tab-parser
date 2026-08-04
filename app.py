@@ -1,0 +1,370 @@
+"""Click-to-run GUI for the YouTube Guitar Tab Parser.
+
+Paste a YouTube URL and press Generate. A window then asks you to drag a box
+around the tab area on one frame; the app crops every frame to that box, removes
+duplicate/blank/overlapping lines (or stitches a sideways-scrolling tab), and
+saves a PDF named after the video into a `tabs` folder next to the app (existing
+files there are left untouched). All intermediate files (video, frames, cropped
+images) are deleted automatically.
+
+Packaged into a single-file app with PyInstaller (see build_windows.bat for
+Windows, build_mac.sh for macOS), so the person you share it with does not
+need Python or any setup.
+"""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import traceback
+import shutil
+
+try:
+    import winsound  # Windows only; used for the "your turn" chime
+except ImportError:
+    winsound = None
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from PIL import Image, ImageTk
+
+from clear_files import clear_all
+from download_frames import download
+from extract_tab_pics import extract_tab
+from clean_tab import make_pdf
+
+
+def app_base_dir():
+    """Folder the app lives in: next to the .exe when frozen, else the source dir."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def default_output_dir():
+    """Finished PDFs are collected in a `tabs` folder next to the app."""
+    return os.path.join(app_base_dir(), "tabs")
+
+
+def safe_filename(name):
+    """Turns a video title into a valid filename (Windows and macOS)."""
+    name = re.sub(r'[\\/:*?"<>|]+', "", name or "").strip()
+    name = re.sub(r"\s+", " ", name)
+    return name[:120] or "tab"
+
+
+def unique_path(path):
+    """Returns `path`, or `path (2)`, `path (3)`, ... if it already exists."""
+    if not os.path.exists(path):
+        return path
+    root, ext = os.path.splitext(path)
+    i = 2
+    while os.path.exists(f"{root} ({i}){ext}"):
+        i += 1
+    return f"{root} ({i}){ext}"
+
+
+class RegionSelector(tk.Toplevel):
+    """Modal window: user drags a rectangle over the tab area of one frame.
+
+    Returns bounds as (y1, x1, y2, x2) in the original image's pixel coordinates,
+    matching region_selector.prompt_coords so extract_tab can use it unchanged.
+    """
+
+    def __init__(self, master, image_path, on_done):
+        super().__init__(master)
+        self.title("Select the tab area")
+        self.on_done = on_done
+        self._sent = False
+
+        img = Image.open(image_path)
+        max_w, max_h = 1100, 680
+        self.scale = min(max_w / img.width, max_h / img.height, 1.0)
+        disp = img.resize((max(1, int(img.width * self.scale)),
+                           max(1, int(img.height * self.scale))))
+        self.tkimg = ImageTk.PhotoImage(disp)
+
+        ttk.Label(
+            self,
+            text="Drag a box around the guitar-tab / notation area, then click Confirm.",
+            padding=8,
+        ).pack()
+
+        self.canvas = tk.Canvas(self, width=disp.width, height=disp.height, cursor="cross")
+        self.canvas.pack(padx=10)
+        self.canvas.create_image(0, 0, anchor="nw", image=self.tkimg)
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>", self._drag)
+
+        self._start = None
+        self._rect = None
+
+        bar = ttk.Frame(self, padding=8)
+        bar.pack()
+        self.confirm_btn = ttk.Button(bar, text="Confirm", command=self._confirm, state="disabled")
+        self.confirm_btn.pack(side="left", padx=5)
+        ttk.Button(bar, text="Cancel", command=self._cancel).pack(side="left", padx=5)
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.transient(master)
+        self.grab_set()
+        self.resizable(False, False)
+
+    def _press(self, e):
+        self._start = (e.x, e.y)
+        if self._rect:
+            self.canvas.delete(self._rect)
+        self._rect = self.canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="#12b886", width=2)
+
+    def _drag(self, e):
+        if self._start and self._rect:
+            self.canvas.coords(self._rect, self._start[0], self._start[1], e.x, e.y)
+            self.confirm_btn.config(state="normal")
+
+    def _confirm(self):
+        x0, y0, x1, y1 = self.canvas.coords(self._rect)
+        xs = sorted((x0, x1))
+        ys = sorted((y0, y1))
+        if xs[1] - xs[0] < 5 or ys[1] - ys[0] < 5:
+            messagebox.showwarning("Too small", "Please drag a larger box.")
+            return
+        ix, ex = int(xs[0] / self.scale), int(xs[1] / self.scale)
+        iy, ey = int(ys[0] / self.scale), int(ys[1] / self.scale)
+        self._finish((iy, ix, ey, ex))
+
+    def _cancel(self):
+        self._finish(None)
+
+    def _finish(self, bounds):
+        if not self._sent:
+            self._sent = True
+            self.on_done(bounds)
+        self.destroy()
+
+
+class _GuiLog:
+    """File-like object that forwards writes to the GUI log, thread-safely."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def write(self, msg):
+        if msg:
+            self.app.append_log(msg)
+
+    def flush(self):
+        pass
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("YouTube Guitar Tab Parser")
+        self.geometry("640x520")
+        self.minsize(560, 460)
+
+        self._region_bounds = None
+        self._region_event = threading.Event()
+
+        pad = {"padx": 12, "pady": 6}
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="YouTube URL").grid(row=0, column=0, sticky="w")
+        self.url_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.url_var).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+
+        ttk.Label(frm, text="Save folder  (finished PDFs are added here; existing files are kept)").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.out_var = tk.StringVar(value=default_output_dir())
+        ttk.Entry(frm, textvariable=self.out_var).grid(row=3, column=0, sticky="ew")
+        ttk.Button(frm, text="Browse...", command=self._browse).grid(row=3, column=1, sticky="e", padx=(8, 0))
+
+        self.generate_btn = ttk.Button(frm, text="Generate Tab PDF", command=self._on_generate)
+        self.generate_btn.grid(row=4, column=0, columnspan=2, sticky="ew", pady=12)
+
+        # Prominent status line + progress bar (the main "what's happening" cue).
+        self.status_var = tk.StringVar(value="Ready — paste a URL and press Generate.")
+        self.status_label = tk.Label(frm, textvariable=self.status_var, anchor="w",
+                                     font=("Segoe UI", 11, "bold"), fg="#868e96")
+        self.status_label.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 2))
+
+        self.progress = ttk.Progressbar(frm, mode="determinate", maximum=100)
+        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+
+        ttk.Label(frm, text="Details").grid(row=7, column=0, sticky="w")
+        self.log_text = tk.Text(frm, height=9, wrap="word", state="disabled")
+        self.log_text.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        scroll = ttk.Scrollbar(frm, command=self.log_text.yview)
+        scroll.grid(row=8, column=2, sticky="ns")
+        self.log_text.configure(yscrollcommand=scroll.set)
+
+        frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(8, weight=1)
+
+        # Route every print() (ours and the pipeline's) to the log box. This also
+        # keeps the windowed .exe from crashing on print when there is no console.
+        sys.stdout = _GuiLog(self)
+        sys.stderr = _GuiLog(self)
+
+        print("Paste a YouTube URL and press Generate.")
+
+    # ---- logging (safe from any thread) ----
+    def append_log(self, msg):
+        self.after(0, self._append, msg)
+
+    def _append(self, msg):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg)
+        if not msg.endswith("\n"):
+            self.log_text.insert("end", "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def clear_log(self):
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+
+    # ---- status + progress (safe from any thread) ----
+    def set_status(self, text, color="#1c7ed6"):
+        self.after(0, lambda: (self.status_var.set(text), self.status_label.config(fg=color)))
+
+    def set_progress(self, pct):
+        """pct in 0..100 shows an exact bar; None shows a busy (animated) bar."""
+        def apply():
+            if pct is None:
+                self.progress.config(mode="indeterminate")
+                self.progress.start(12)
+            else:
+                self.progress.stop()
+                self.progress.config(mode="determinate")
+                self.progress["value"] = max(0, min(100, pct))
+        self.after(0, apply)
+
+    def play_alert(self):
+        try:
+            if winsound:
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
+    # ---- region selection bridge (worker thread -> main-thread dialog) ----
+    def select_region(self, image_path):
+        self._region_bounds = None
+        self._region_event.clear()
+        self.set_status("👉 Your turn: drag a box around the tab area in the pop-up window", "#e8590c")
+        self.after(0, lambda: self._open_region(image_path))
+        self._region_event.wait()
+        if self._region_bounds is None:
+            raise RuntimeError("Tab area selection was cancelled.")
+        return self._region_bounds
+
+    def _open_region(self, image_path):
+        self.play_alert()  # small chime so the user notices the pop-up
+        RegionSelector(self, image_path, on_done=self._on_region_done)
+
+    def _on_region_done(self, bounds):
+        self._region_bounds = bounds
+        self._region_event.set()
+
+    def _browse(self):
+        chosen = filedialog.askdirectory(initialdir=self.out_var.get() or os.path.expanduser("~"))
+        if chosen:
+            self.out_var.set(chosen)
+
+    def _on_generate(self):
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please paste a YouTube URL first.")
+            return
+        base = self.out_var.get().strip() or default_output_dir()
+        self.clear_log()                 # wipe the previous run's messages
+        self.set_progress(0)
+        self.generate_btn.config(state="disabled", text="Working…")
+        threading.Thread(target=self._run, args=(url, base), daemon=True).start()
+
+    def _run(self, url, out_dir):
+        # All the messy intermediate files (video, frames, cropped images) go in a
+        # throwaway system-temp folder -- never inside out_dir -- so the user's
+        # existing files in out_dir are never cleared or touched.
+        work = tempfile.mkdtemp(prefix="guitartab_")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            clear_all(work)
+
+            self.set_status("⬇  Downloading and preparing the video…")
+            self.set_progress(0)
+            title = download(work, url, on_progress=self.set_progress)
+
+            # select_region sets its own status + chime and blocks for the user.
+            extract_tab(work, select_region=self.select_region)
+
+            self.set_status("🛠  Building your tab PDF…")
+            self.set_progress(None)
+            print("Removing duplicate / blank / overlapping lines and building PDF...")
+            make_pdf(work)
+
+            # A unique name means we only ever ADD to out_dir, never overwrite.
+            final_pdf = unique_path(os.path.join(out_dir, safe_filename(title) + " tab.pdf"))
+            shutil.copyfile(os.path.join(work, "output.pdf"), final_pdf)
+
+            print(f"Done! Saved: {final_pdf}")
+            self.after(0, lambda: self._finish_ok(final_pdf))
+        except (ValueError, TimeoutError) as e:
+            # Expected, understandable problems (too long, timed out, live, ...).
+            msg = str(e)
+            print("⚠ " + msg)
+            self.set_status("❌  " + msg[:70], "#e03131")
+            self.set_progress(0)
+            self.after(0, lambda m=msg: messagebox.showerror("Cannot process this video", m))
+        except Exception as e:
+            msg = str(e)
+            print("ERROR: " + msg)
+            print(traceback.format_exc())
+            self.set_status("❌  Error — see details below", "#e03131")
+            self.set_progress(0)
+            self.after(0, lambda m=msg: messagebox.showerror("Something went wrong", m))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+            self.after(0, lambda: self.generate_btn.config(state="normal", text="Generate Tab PDF"))
+
+    def _finish_ok(self, pdf_path):
+        self.progress.stop()
+        self.progress.config(mode="determinate")
+        self.progress["value"] = 100
+        self.set_status("✅  Done!  Saved: " + os.path.basename(pdf_path), "#2f9e44")
+        try:
+            if sys.platform == "win32":
+                os.startfile(pdf_path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", pdf_path])
+            else:
+                subprocess.run(["xdg-open", pdf_path])
+        except Exception:
+            pass
+        messagebox.showinfo("Done", f"Your tab PDF is ready:\n\n{pdf_path}")
+
+
+def _selftest():
+    """Verify the packaged exe is complete. Optionally decode a video file passed
+    after --selftest, to confirm OpenCV's bundled FFmpeg backend works when frozen."""
+    import cv2, numpy, yt_dlp, PIL  # noqa: F401
+    videos = [a for a in sys.argv[1:] if a.lower().endswith((".mp4", ".webm", ".mkv", ".mov"))]
+    if videos:
+        cap = cv2.VideoCapture(videos[0])
+        opened = cap.isOpened()
+        got, _ = cap.read() if opened else (False, None)
+        cap.release()
+        print(f"video-decode: opened={opened} read_frame={got}")
+        return 0 if (opened and got) else 2
+    print("selftest ok")
+    return 0
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
+    App().mainloop()
