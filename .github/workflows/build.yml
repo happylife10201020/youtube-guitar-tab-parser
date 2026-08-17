@@ -57,6 +57,13 @@ jobs:
             exit 1
           fi
 
+      - name: Compute asset filename
+        id: asset
+        shell: bash
+        run: |
+          APP_VERSION=$(python -c "from version import APP_VERSION; print(APP_VERSION)")
+          echo "zip=${{ matrix.asset }}-v${APP_VERSION}.zip" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -113,23 +120,23 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
-            "dist/${{ steps.mode.outputs.name }}.app" "${{ matrix.asset }}.zip"
+            "dist/${{ steps.mode.outputs.name }}.app" "${{ steps.asset.outputs.zip }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/${{ steps.mode.outputs.name }}.exe" -DestinationPath "${{ matrix.asset }}.zip"
+          Compress-Archive -Path "dist/${{ steps.mode.outputs.name }}.exe" -DestinationPath "${{ steps.asset.outputs.zip }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}${{ steps.mode.outputs.release == 'true' && '' || '-dev' }}
-          path: ${{ matrix.asset }}.zip
+          path: ${{ steps.asset.outputs.zip }}
 
       - name: Attach to GitHub Release
         if: steps.mode.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset }}.zip
+          files: ${{ steps.asset.outputs.zip }}
           generate_release_notes: true

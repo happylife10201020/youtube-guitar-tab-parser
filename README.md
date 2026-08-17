@@ -10,7 +10,7 @@ YouTube 기타 타브 영상에서 악보 부분만 잘라내어 한 장의 PDF�
 
 ### Windows
 
-1. [Releases 페이지](https://github.com/happylife10201020/youtube-guitar-tab-parser/releases/latest)에서 `GuitarTabParser-windows.zip`을 내려받아 압축을 푼다.
+1. [Releases 페이지](https://github.com/happylife10201020/youtube-guitar-tab-parser/releases/latest)에서 `GuitarTabParser-windows-v<버전>.zip`을 내려받아 압축을 푼다.
 2. `GuitarTabParser.exe`를 실행한다. "Windows의 PC 보호" 창이 뜨면 추가 정보 → 실행을 누른다.
 3. YouTube 주소를 입력하고 Generate Tab PDF를 누른다.
 4. 화면에 뜬 이미지에서 악보 영역을 드래그로 지정하고 Confirm을 누른다.
@@ -18,7 +18,7 @@ YouTube 기타 타브 영상에서 악보 부분만 잘라내어 한 장의 PDF�
 
 ### macOS
 
-1. [Releases 페이지](https://github.com/happylife10201020/youtube-guitar-tab-parser/releases/latest)에서 `GuitarTabParser-mac.zip`을 내려받아 압축을 푼다.
+1. [Releases 페이지](https://github.com/happylife10201020/youtube-guitar-tab-parser/releases/latest)에서 `GuitarTabParser-mac-v<버전>.zip`을 내려받아 압축을 푼다.
 2. `GuitarTabParser.app`을 실행한다. "확인되지 않은 개발자" 경고가 뜨면 앱을 control-클릭 후 열기를 선택한다.
 3. 이후 사용법은 Windows와 같다.
 
