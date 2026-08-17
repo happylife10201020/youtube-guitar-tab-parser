@@ -82,6 +82,76 @@ def unique_path(path):
     return f"{root} ({i}){ext}"
 
 
+def setup_entry_clipboard(entry):
+    """Makes copy/paste work reliably in an Entry, plus a right-click menu.
+
+    In the PyInstaller-packaged app on macOS, Cmd+V only flashes the Edit menu:
+    the accelerator fires but the <<Paste>> virtual event never reaches the
+    focused widget, so nothing is inserted. Bind the shortcuts straight to the
+    entry (returning "break" so a working default doesn't run twice), and give
+    every platform a right-click Cut/Copy/Paste/Select-All menu as a
+    keyboard-free fallback.
+    """
+
+    def paste(event=None):
+        try:
+            text = entry.clipboard_get()
+        except tk.TclError:
+            return "break"   # clipboard empty or not text
+        try:
+            entry.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass             # no selection
+        entry.insert("insert", text)
+        return "break"
+
+    def copy(event=None):
+        try:
+            text = entry.selection_get()
+        except tk.TclError:
+            return "break"   # no selection
+        entry.clipboard_clear()
+        entry.clipboard_append(text)
+        return "break"
+
+    def cut(event=None):
+        copy()
+        try:
+            entry.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        return "break"
+
+    def select_all(event=None):
+        entry.select_range(0, "end")
+        entry.icursor("end")
+        return "break"
+
+    accel = "Command" if sys.platform == "darwin" else "Control"
+    for key, handler in (("v", paste), ("c", copy), ("x", cut), ("a", select_all)):
+        entry.bind(f"<{accel}-{key}>", handler)
+        entry.bind(f"<{accel}-{key.upper()}>", handler)   # Caps Lock / Shift held
+
+    menu = tk.Menu(entry, tearoff=0)
+    menu.add_command(label="Cut", command=cut)
+    menu.add_command(label="Copy", command=copy)
+    menu.add_command(label="Paste", command=paste)
+    menu.add_separator()
+    menu.add_command(label="Select All", command=select_all)
+
+    def popup(event):
+        entry.focus_set()
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    # Button-2/-3 cover right-click across platforms; Control-click is the
+    # macOS trackpad convention.
+    entry.bind("<Button-2>", popup)
+    entry.bind("<Button-3>", popup)
+    if sys.platform == "darwin":
+        entry.bind("<Control-Button-1>", popup)
+
+
 class RegionSelector(tk.Toplevel):
     """Modal window: user drags a rectangle over the tab area of one frame.
 
@@ -191,11 +261,15 @@ class App(tk.Tk):
 
         ttk.Label(frm, text="YouTube URL").grid(row=0, column=0, sticky="w")
         self.url_var = tk.StringVar()
-        ttk.Entry(frm, textvariable=self.url_var).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        url_entry = ttk.Entry(frm, textvariable=self.url_var)
+        url_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        setup_entry_clipboard(url_entry)
 
         ttk.Label(frm, text="Save folder  (finished PDFs are added here; existing files are kept)").grid(row=2, column=0, columnspan=2, sticky="w")
         self.out_var = tk.StringVar(value=default_output_dir())
-        ttk.Entry(frm, textvariable=self.out_var).grid(row=3, column=0, sticky="ew")
+        out_entry = ttk.Entry(frm, textvariable=self.out_var)
+        out_entry.grid(row=3, column=0, sticky="ew")
+        setup_entry_clipboard(out_entry)
         ttk.Button(frm, text="Browse...", command=self._browse).grid(row=3, column=1, sticky="e", padx=(8, 0))
 
         self.generate_btn = ttk.Button(frm, text="Generate Tab PDF", command=self._on_generate)
