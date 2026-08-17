@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 #  Builds the macOS app. Run this ON A MAC (PyInstaller cannot
-#  cross-build). Requires Python 3.8+ (python3 on PATH).
+#  cross-build). Requires Python 3.10+ (python3 on PATH;
+#  sys.stdlib_module_names needs 3.10+).
 #
 #  Two build modes:
 #    ./build_mac.sh              -> dev build   (GuitarTabParserDev.app,

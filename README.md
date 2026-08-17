@@ -70,7 +70,7 @@ yt-dlp는 앱에 굳혀 넣지 않는다. 빌드에 wheel 파일로만 동봉되
 
 ### exe / app 손으로 빌드하기
 
-Windows (Python 3.8+):
+Windows (Python 3.10+):
 
 ```bat
 build_windows.bat            :: 개발 빌드 -> dist\GuitarTabParserDev.exe

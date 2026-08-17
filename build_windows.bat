@@ -1,6 +1,7 @@
 @echo off
 REM ============================================================
-REM  Builds the Windows exe. Requires Python 3.8+ on PATH.
+REM  Builds the Windows exe. Requires Python 3.10+ on PATH (sys.stdlib_module_names
+REM  needs 3.10+).
 REM
 REM  Two build modes:
 REM    build_windows.bat            -> dev build (GuitarTabParserDev.exe,
@@ -58,7 +59,7 @@ for /f "delims=" %%A in ('python -c "import sys; skip={'antigravity','this','idl
 pushd "%BUILDDIR%\src"
 python -m PyInstaller --noconfirm --onefile --windowed --name %NAME% ^
   --exclude-module yt_dlp ^
-  --add-data "ytdlp.whl;." ^
+  --add-data "%BUILDDIR%\src\ytdlp.whl;." ^
   --collect-all certifi ^
   --collect-all requests ^
   --collect-all urllib3 ^
@@ -83,6 +84,6 @@ exit /b 0
 
 :err
 echo.
-echo Build failed. Make sure Python 3.8+ is installed and on PATH.
+echo Build failed. Make sure Python 3.10+ is installed and on PATH.
 pause
 exit /b 1
