@@ -49,19 +49,41 @@ YouTube 기타 타브 영상에서 악보 부분만 잘라내어 한 장의 PDF�
 
 ## 개발자용
 
-### exe / app 다시 빌드하기
+### 버전 규칙 (SemVer)
 
-Windows: `build_windows.bat`을 실행한다. Python 3.8 이상이 필요하다.
-빌드가 끝나면 `dist\GuitarTabParser.exe`가 생성된다.
+버전은 `MAJOR.MINOR.PATCH` 형식이고 [version.py](version.py)가 단일 기준이다.
 
-macOS: Mac에서 직접 실행해야 한다. PyInstaller는 다른 OS용 앱을 크로스 빌드하지 못한다.
+- **MAJOR**: 사용법이 달라지는 큰 변경
+- **MINOR**: 새 기능 추가
+- **PATCH**: 버그 수정, 내부 개선
+
+릴리즈 절차: 변경 커밋에서 `version.py`를 올리고, 같은 버전의 태그 `v<버전>`(예: `v1.2.0`)을 푸시한다. 태그와 `version.py`가 다르면 CI가 빌드를 거부한다.
+
+### 자동 빌드 (GitHub Actions)
+
+- `main`에 푸시 → **개발 빌드** (`GuitarTabParserDev`, 상세 로그 창 있음) 가 워크플로 아티팩트로 올라간다.
+- `v*` 태그 푸시 → **릴리즈 빌드** (`GuitarTabParser`, 상세 로그 창 없음 — 로그는 사용자 데이터 폴더의 `last-run.log`에 기록) 가 macOS/Windows 모두 빌드되어 해당 태그의 GitHub Release에 자동 첨부된다.
+
+### yt-dlp 자동 업데이트
+
+yt-dlp는 앱에 굳혀 넣지 않는다. 빌드에 wheel 파일로만 동봉되고, 첫 실행 때 사용자 데이터 폴더(macOS: `~/Library/Application Support/GuitarTabParser`, Windows: `%LOCALAPPDATA%\GuitarTabParser`)에 풀린 뒤 거기서 로드된다. 실행할 때마다 백그라운드에서 PyPI 최신 버전을 확인해 받아 두고, 다음 실행부터 적용된다. YouTube가 방식을 바꿔도 앱 재배포 없이 따라간다.
+
+### exe / app 손으로 빌드하기
+
+Windows (Python 3.8+):
+
+```bat
+build_windows.bat            :: 개발 빌드 -> dist\GuitarTabParserDev.exe
+set RELEASE=1 && build_windows.bat   :: 릴리즈 빌드 -> dist\GuitarTabParser.exe
+```
+
+macOS (Mac에서만 가능 — PyInstaller는 크로스 빌드를 못 한다):
 
 ```sh
 chmod +x build_mac.sh
-./build_mac.sh
+./build_mac.sh               # 개발 빌드 -> dist/GuitarTabParserDev.app
+RELEASE=1 ./build_mac.sh     # 릴리즈 빌드 -> dist/GuitarTabParser.app
 ```
-
-빌드가 끝나면 `dist/GuitarTabParser.app`이 생성된다.
 
 ### 소스로 직접 실행하기 (CLI)
 

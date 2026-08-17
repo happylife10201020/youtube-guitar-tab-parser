@@ -2,9 +2,9 @@ import os
 import re
 import time
 import cv2
-import yt_dlp
 from urllib.parse import urlparse, parse_qs
 from cv_io import imread, imwrite
+from ytdlp_runtime import get_ytdlp
 
 _VIDEO_ID = re.compile(r'^[A-Za-z0-9_-]{11}$')
 
@@ -84,6 +84,9 @@ def download_youtube_video(url, output_path, log=print, on_progress=None,
                            max_download_seconds=MAX_DOWNLOAD_SECONDS):
     # Single-file formats only (no "+"), so yt-dlp never needs ffmpeg to merge.
     # We only need the video track; audio is irrelevant for tab extraction.
+    # yt-dlp is loaded through ytdlp_runtime so the packaged app always uses
+    # the newest auto-updated copy instead of the one frozen at build time.
+    yt_dlp = get_ytdlp(log)
     url = normalize_youtube_url(url)
     last = {'pct': -1.0}
     start = {'t': None}

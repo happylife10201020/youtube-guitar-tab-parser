@@ -1,0 +1,135 @@
+# Dev + release builds for macOS and Windows.
+#
+# - Push to main         -> DEV builds (verbose Details box), uploaded as
+#                           workflow artifacts only.
+# - Push a tag v*        -> RELEASE builds (no Details box), attached to a
+#                           GitHub Release for that tag. The tag must match
+#                           APP_VERSION in version.py or the build fails.
+#
+# Versioning rule (see version.py): SemVer MAJOR.MINOR.PATCH.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: GuitarTabParser-mac
+          - os: windows-latest
+            asset: GuitarTabParser-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Decide build mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "release=true"  >> "$GITHUB_OUTPUT"
+            echo "name=GuitarTabParser" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "name=GuitarTabParserDev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check tag matches version.py (release only)
+        if: steps.mode.outputs.release == 'true'
+        shell: bash
+        run: |
+          APP_VERSION=$(python -c "from version import APP_VERSION; print(APP_VERSION)")
+          TAG="${GITHUB_REF#refs/tags/v}"
+          if [[ "$APP_VERSION" != "$TAG" ]]; then
+            echo "::error::Tag v$TAG does not match version.py ($APP_VERSION). Bump version.py first."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Fetch yt-dlp wheel (shipped as data, auto-updated at runtime)
+        shell: bash
+        run: |
+          mkdir -p build_assets
+          python -m pip download yt-dlp --no-deps --dest build_assets --quiet
+          python -c "import glob, shutil; shutil.copy(sorted(glob.glob('build_assets/yt_dlp-*.whl'))[-1], 'build_assets/ytdlp.whl')"
+
+      - name: Write build_config.py
+        shell: bash
+        run: |
+          if [[ "${{ steps.mode.outputs.release }}" == "true" ]]; then
+            echo "IS_RELEASE = True" > build_config.py
+          else
+            echo "IS_RELEASE = False" > build_config.py
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          # Full stdlib as hidden imports: the runtime-loaded yt-dlp (any
+          # future version) may need modules the app itself never references.
+          STDLIB_HIDDEN=$(python -c "import sys; skip={'antigravity','this','idlelib','turtledemo','turtle','test'}; print(' '.join('--hidden-import='+m for m in sys.stdlib_module_names if not m.startswith('_') and m not in skip))")
+          SEP=":"; [[ "$RUNNER_OS" == "Windows" ]] && SEP=";"
+          python -m PyInstaller --noconfirm --onefile --windowed --name "${{ steps.mode.outputs.name }}" \
+            --exclude-module yt_dlp \
+            --add-data "build_assets/ytdlp.whl${SEP}." \
+            --collect-all certifi \
+            --collect-all requests \
+            --collect-all urllib3 \
+            --collect-all websockets \
+            --collect-all mutagen \
+            --collect-all Cryptodome \
+            --hidden-import brotli \
+            $STDLIB_HIDDEN \
+            app.py
+
+      - name: Selftest (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          "dist/${{ steps.mode.outputs.name }}.app/Contents/MacOS/${{ steps.mode.outputs.name }}" --selftest
+
+      - name: Selftest (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          "dist/${{ steps.mode.outputs.name }}.exe" --selftest || [[ $? == 0 ]]
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/${{ steps.mode.outputs.name }}.app" "${{ matrix.asset }}.zip"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/${{ steps.mode.outputs.name }}.exe" -DestinationPath "${{ matrix.asset }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}${{ steps.mode.outputs.release == 'true' && '' || '-dev' }}
+          path: ${{ matrix.asset }}.zip
+
+      - name: Attach to GitHub Release
+        if: steps.mode.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}.zip
+          generate_release_notes: true

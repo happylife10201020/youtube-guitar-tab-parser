@@ -6,3 +6,5 @@ dist/
 *.spec
 GuitarTabParser/
 _work/
+build_assets/
+build_config.py
