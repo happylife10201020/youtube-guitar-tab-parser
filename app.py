@@ -37,9 +37,25 @@ from clean_tab import make_pdf
 
 
 def app_base_dir():
-    """Folder the app lives in: next to the .exe when frozen, else the source dir."""
+    """Folder the app lives in: next to the .exe on Windows, next to the .app
+    bundle on macOS, else the source dir.
+
+    On Windows, sys.executable is the .exe itself, so its directory is already
+    "next to the app". On macOS, PyInstaller's --windowed build is wrapped in a
+    GuitarTabParser.app bundle, so sys.executable actually points three levels
+    deep inside it (GuitarTabParser.app/Contents/MacOS/GuitarTabParser) -- using
+    its directory as-is would put the `tabs` folder inside the bundle instead of
+    next to it. Climb out of the bundle so it lands beside the .app, matching
+    Windows behavior and what the README promises.
+    """
     if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if sys.platform == "darwin":
+            parts = exe_dir.split(os.sep)
+            for i, part in enumerate(parts):
+                if part.endswith(".app"):
+                    return os.sep.join(parts[:i]) or os.sep
+        return exe_dir
     return os.path.dirname(os.path.abspath(__file__))
 
 

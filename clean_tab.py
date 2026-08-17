@@ -66,7 +66,7 @@ def ncc(a, b):
         return 0.0
     return float(np.dot(a, b) / (na * nb))
 
-def detect_overlap_fraction(notations, min_confidence=0.45):
+def detect_overlap_fraction(notations, min_confidence=0.45, min_prominence=0.15):
     """Estimates the horizontal overlap between consecutive tab lines.
 
     Scrolling tab videos often re-show the last measures of one line as the
@@ -82,20 +82,34 @@ def detect_overlap_fraction(notations, min_confidence=0.45):
     transitions cancels the ambiguity of self-similar tab content that defeats
     per-transition matching. Returns 0.0 when no consistent overlap clears
     ``min_confidence`` -- most videos page cleanly and are left untouched.
+
+    A high best score alone is not proof of overlap: a repetitive song (the same
+    groove bar after bar) correlates fairly well at *every* candidate fraction,
+    producing a flat, uniformly-high curve whose maximum can drift past
+    ``min_confidence`` -- and whether it does can hinge on where the user happened
+    to drag the crop box, wrongly chopping the head off every line. A genuine
+    overlap instead shows a sharp peak at the true fraction. So we also require
+    the best score to stand out from the curve's median by ``min_prominence``.
     """
     if len(notations) < 3:
         return 0.0
 
     best_fraction, best_score = 0.0, -1.0
+    medians = []
     for fraction in np.arange(0.05, 0.60, 0.01):
         width = int(TARGET_WIDTH * fraction)
         scores = [ncc(notations[k - 1][:, TARGET_WIDTH - width:], notations[k][:, :width])
                   for k in range(1, len(notations))]
         median = float(np.median(scores))
+        medians.append(median)
         if median > best_score:
             best_fraction, best_score = float(fraction), median
 
-    return best_fraction if best_score >= min_confidence else 0.0
+    if best_score < min_confidence:
+        return 0.0
+    if best_score - float(np.median(medians)) < min_prominence:
+        return 0.0   # flat curve: self-similar content, not a real overlap
+    return best_fraction
 
 def _scaled(image_path, flag):
     """Reads an image and scales it to TARGET_WIDTH, or returns None."""
