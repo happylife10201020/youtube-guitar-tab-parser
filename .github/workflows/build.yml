@@ -134,7 +134,12 @@ jobs:
           # future version) may need modules the app itself never references.
           STDLIB_HIDDEN=$(python -c "import sys; skip={'antigravity','this','idlelib','turtledemo','turtle','test'}; print(' '.join('--hidden-import='+m for m in sys.stdlib_module_names if not m.startswith('_') and m not in skip))")
           SEP=":"; [[ "$RUNNER_OS" == "Windows" ]] && SEP=";"
-          python -m PyInstaller --noconfirm --onefile --windowed --name "${{ steps.mode.outputs.name }}" \
+          # Windows ships one .exe, so onefile. On macOS the .app is already a
+          # folder, and onefile would make it unpack ~200MB to a temp dir on
+          # every launch -- many seconds with no visible sign the app is
+          # starting, which reads as "it didn't open". onedir starts at once.
+          MODE="--onedir"; [[ "$RUNNER_OS" == "Windows" ]] && MODE="--onefile"
+          python -m PyInstaller --noconfirm $MODE --windowed --name "${{ steps.mode.outputs.name }}" \
             --exclude-module yt_dlp \
             --add-data "build_assets/ytdlp.whl${SEP}." \
             --collect-all certifi \

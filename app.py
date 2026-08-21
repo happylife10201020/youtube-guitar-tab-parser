@@ -28,7 +28,7 @@ except ImportError:
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk
+from PIL import Image, ImageEnhance, ImageTk
 
 from clear_files import clear_all
 from download_frames import download
@@ -192,6 +192,9 @@ class RegionSelector(tk.Toplevel):
     matching region_selector.prompt_coords so extract_tab can use it unchanged.
     """
 
+    MIN_BOX = 10          # display pixels; smaller is a stray click, not a drag
+    DIM = 0.35            # brightness of the area that will be cut away
+
     def __init__(self, master, image_path, on_done):
         super().__init__(master)
         self.title("Select the tab area")
@@ -201,57 +204,154 @@ class RegionSelector(tk.Toplevel):
         img = Image.open(image_path)
         max_w, max_h = 1100, 680
         self.scale = min(max_w / img.width, max_h / img.height, 1.0)
-        disp = img.resize((max(1, int(img.width * self.scale)),
-                           max(1, int(img.height * self.scale))))
-        self.tkimg = ImageTk.PhotoImage(disp)
+        self._bright = img.resize((max(1, int(img.width * self.scale)),
+                                   max(1, int(img.height * self.scale))))
+        self._img_w, self._img_h = self._bright.size
 
-        ttk.Label(
-            self,
-            text="Drag a box around the guitar-tab / notation area, then click Confirm.",
-            padding=8,
-        ).pack()
+        # Two copies of the frame: the real one, and a darkened one. Before any
+        # drag the bright copy is shown so the tab is easy to read. Once a box
+        # exists the dark copy becomes the background and only the box is drawn
+        # bright on top, so what will be kept is obvious at a glance.
+        self._tk_bright = ImageTk.PhotoImage(self._bright)
+        self._tk_dim = ImageTk.PhotoImage(
+            ImageEnhance.Brightness(self._bright).enhance(self.DIM))
+        self._tk_reveal = None
 
-        self.canvas = tk.Canvas(self, width=disp.width, height=disp.height, cursor="cross")
-        self.canvas.pack(padx=10)
-        self.canvas.create_image(0, 0, anchor="nw", image=self.tkimg)
+        head = ttk.Frame(self, padding=(10, 8, 10, 2))
+        head.pack(fill="x")
+        tk.Label(head, text="Drag a box around the tab",
+                 font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x")
+        tk.Label(head,
+                 text="Press the mouse at one corner of the tab, drag to the "
+                      "opposite corner, then let go. Anything left dark is cut away.",
+                 anchor="w", justify="left", fg="#555555").pack(fill="x")
+
+        self.canvas = tk.Canvas(self, width=self._img_w, height=self._img_h,
+                                cursor="cross", highlightthickness=0)
+        self.canvas.pack(padx=10, pady=6)
+        self._base = self.canvas.create_image(0, 0, anchor="nw", image=self._tk_bright)
+        self._rect = None
+        self._reveal = None
+        self._start = (0, 0)
+        self._box = None
+        self._redraw_pending = False
+
+        # A hint sitting on the image itself, where the user has to act. It goes
+        # away for good on the first press.
+        self._hint = self._make_hint()
+
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._drag)
+        self.canvas.bind("<ButtonRelease-1>", self._drag)
 
-        self._start = None
-        self._rect = None
+        self.size_var = tk.StringVar(value="No box yet.")
+        tk.Label(self, textvariable=self.size_var, fg="#555555").pack()
 
         bar = ttk.Frame(self, padding=8)
         bar.pack()
-        self.confirm_btn = ttk.Button(bar, text="Confirm", command=self._confirm, state="disabled")
+        self.confirm_btn = ttk.Button(bar, text="Confirm", command=self._confirm,
+                                      state="disabled")
         self.confirm_btn.pack(side="left", padx=5)
         ttk.Button(bar, text="Cancel", command=self._cancel).pack(side="left", padx=5)
+
+        self.bind("<Return>", lambda e: self._confirm())
+        self.bind("<Escape>", lambda e: self._cancel())
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.transient(master)
         self.grab_set()
         self.resizable(False, False)
 
+    def _make_hint(self):
+        """Text over the middle of the image telling the user what to do."""
+        cx, cy = self._img_w // 2, self._img_h // 2
+        text = self.canvas.create_text(cx, cy, text="Click and drag across the tab",
+                                       fill="#ffffff", font=("Segoe UI", 14, "bold"))
+        x0, y0, x1, y1 = self.canvas.bbox(text)
+        pad = 12
+        box = self.canvas.create_rectangle(x0 - pad, y0 - pad, x1 + pad, y1 + pad,
+                                           fill="#1c1c1c", outline="#12b886", width=2)
+        self.canvas.tag_raise(text, box)   # keep the text above its backing box
+        return (box, text)
+
+    def _clear_hint(self):
+        if self._hint:
+            for item in self._hint:
+                self.canvas.delete(item)
+            self._hint = None
+
+    def _clamp(self, x, y):
+        return (max(0, min(int(x), self._img_w - 1)),
+                max(0, min(int(y), self._img_h - 1)))
+
     def _press(self, e):
-        self._start = (e.x, e.y)
+        self._clear_hint()
+        self._start = self._clamp(e.x, e.y)
+        self.canvas.itemconfig(self._base, image=self._tk_dim)
         if self._rect:
             self.canvas.delete(self._rect)
-        self._rect = self.canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="#12b886", width=2)
+        x, y = self._start
+        self._rect = self.canvas.create_rectangle(x, y, x, y, outline="#12b886", width=2)
+        self._drag(e)
 
     def _drag(self, e):
-        if self._start and self._rect:
-            self.canvas.coords(self._rect, self._start[0], self._start[1], e.x, e.y)
-            self.confirm_btn.config(state="normal")
+        if not self._rect:
+            return
+        x, y = self._clamp(e.x, e.y)
+        x0, x1 = sorted((self._start[0], x))
+        y0, y1 = sorted((self._start[1], y))
+        self._box = (x0, y0, x1, y1)
+        self.canvas.coords(self._rect, x0, y0, x1, y1)
+
+        big_enough = (x1 - x0) >= self.MIN_BOX and (y1 - y0) >= self.MIN_BOX
+        self.confirm_btn.config(state="normal" if big_enough else "disabled")
+        if big_enough:
+            # Report in source-image pixels, which is what actually gets cropped.
+            self.size_var.set("Box: %d x %d px"
+                              % (round((x1 - x0) / self.scale),
+                                 round((y1 - y0) / self.scale)))
+        else:
+            self.size_var.set("Too small so far -- keep dragging.")
+        self._schedule_reveal()
+
+    def _schedule_reveal(self):
+        """Repaint the bright cut-out, at most once per idle turn.
+
+        Motion events arrive faster than the image work behind a repaint, so
+        coalescing keeps the drag smooth on a large frame.
+        """
+        if not self._redraw_pending:
+            self._redraw_pending = True
+            self.after_idle(self._draw_reveal)
+
+    def _draw_reveal(self):
+        self._redraw_pending = False
+        if not self._box:
+            return
+        x0, y0, x1, y1 = self._box
+        if x1 - x0 < 1 or y1 - y0 < 1:
+            return
+        crop = self._bright.crop((x0, y0, x1, y1))
+        self._tk_reveal = ImageTk.PhotoImage(crop)   # hold a ref or Tk drops it
+        if getattr(self, "_reveal", None) is None:
+            self._reveal = self.canvas.create_image(x0, y0, anchor="nw",
+                                                    image=self._tk_reveal)
+        else:
+            self.canvas.coords(self._reveal, x0, y0)
+            self.canvas.itemconfig(self._reveal, image=self._tk_reveal)
+        self.canvas.tag_raise(self._rect, self._reveal)   # outline stays visible
 
     def _confirm(self):
-        x0, y0, x1, y1 = self.canvas.coords(self._rect)
-        xs = sorted((x0, x1))
-        ys = sorted((y0, y1))
-        if xs[1] - xs[0] < 5 or ys[1] - ys[0] < 5:
-            messagebox.showwarning("Too small", "Please drag a larger box.")
+        if not self._box:
             return
-        ix, ex = int(xs[0] / self.scale), int(xs[1] / self.scale)
-        iy, ey = int(ys[0] / self.scale), int(ys[1] / self.scale)
-        self._finish((iy, ix, ey, ex))
+        x0, y0, x1, y1 = self._box
+        if x1 - x0 < self.MIN_BOX or y1 - y0 < self.MIN_BOX:
+            messagebox.showwarning(
+                "Box too small",
+                "Drag a bigger box around the tab, then click Confirm.")
+            return
+        self._finish((int(y0 / self.scale), int(x0 / self.scale),
+                      int(y1 / self.scale), int(x1 / self.scale)))
 
     def _cancel(self):
         self._finish(None)
@@ -406,7 +506,7 @@ class App(tk.Tk):
     def select_region(self, image_path):
         self._region_bounds = None
         self._region_event.clear()
-        self.set_status("👉 Your turn: drag a box around the tab area in the pop-up window", "#e8590c")
+        self.set_status("👉 Your turn: in the pop-up, drag a box around the tab", "#e8590c")
         self.after(0, lambda: self._open_region(image_path))
         self._region_event.wait()
         if self._region_bounds is None:

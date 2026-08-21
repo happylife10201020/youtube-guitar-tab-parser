@@ -13,6 +13,9 @@
 #  yt-dlp is NOT frozen into the app: it is shipped as a wheel data
 #  file, extracted to the user's app-data folder on first run, and
 #  auto-updated from PyPI in the background (see ytdlp_runtime.py).
+#
+#  Built with --onedir so the app launches instantly; see the note by
+#  the PyInstaller call.
 # ============================================================
 set -e
 
@@ -52,7 +55,12 @@ fi
 # references -- PyInstaller would otherwise prune them.
 STDLIB_HIDDEN=$(python3 -c "import sys; skip={'antigravity','this','idlelib','turtledemo','turtle','test'}; print(' '.join('--hidden-import='+m for m in sys.stdlib_module_names if not m.startswith('_') and m not in skip))")
 
-python3 -m PyInstaller --noconfirm --onefile --windowed --name "$NAME" \
+# onedir, not onefile: a .app is already a folder, so onefile buys nothing and
+# costs a lot -- it unpacks ~200MB to a temp dir on every launch, taking many
+# seconds during which macOS shows no sign the app is starting. People read
+# that as "it didn't open" and keep double-clicking, which starts more copies
+# and makes it worse. onedir starts immediately.
+python3 -m PyInstaller --noconfirm --onedir --windowed --name "$NAME" \
   --exclude-module yt_dlp \
   --add-data "build_assets/ytdlp.whl:." \
   --collect-all certifi \
