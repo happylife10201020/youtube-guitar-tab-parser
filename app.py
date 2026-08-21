@@ -221,9 +221,7 @@ class RegionSelector(tk.Toplevel):
         head.pack(fill="x")
         tk.Label(head, text="Drag a box around the tab",
                  font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x")
-        tk.Label(head,
-                 text="Press the mouse at one corner of the tab, drag to the "
-                      "opposite corner, then let go. Anything left dark is cut away.",
+        tk.Label(head, text="Anything left dark is cut away.",
                  anchor="w", justify="left", fg="#555555").pack(fill="x")
 
         self.canvas = tk.Canvas(self, width=self._img_w, height=self._img_h,
@@ -244,8 +242,10 @@ class RegionSelector(tk.Toplevel):
         self.canvas.bind("<B1-Motion>", self._drag)
         self.canvas.bind("<ButtonRelease-1>", self._drag)
 
-        self.size_var = tk.StringVar(value="No box yet.")
-        tk.Label(self, textvariable=self.size_var, fg="#555555").pack()
+        # height=1 reserves the line even while the text is empty, so the
+        # window does not jump the moment the first size appears.
+        self.size_var = tk.StringVar(value="")
+        tk.Label(self, textvariable=self.size_var, fg="#555555", height=1).pack()
 
         bar = ttk.Frame(self, padding=8)
         bar.pack()
@@ -311,7 +311,7 @@ class RegionSelector(tk.Toplevel):
                               % (round((x1 - x0) / self.scale),
                                  round((y1 - y0) / self.scale)))
         else:
-            self.size_var.set("Too small so far -- keep dragging.")
+            self.size_var.set("Too small -- keep dragging.")
         self._schedule_reveal()
 
     def _schedule_reveal(self):
@@ -346,9 +346,7 @@ class RegionSelector(tk.Toplevel):
             return
         x0, y0, x1, y1 = self._box
         if x1 - x0 < self.MIN_BOX or y1 - y0 < self.MIN_BOX:
-            messagebox.showwarning(
-                "Box too small",
-                "Drag a bigger box around the tab, then click Confirm.")
+            messagebox.showwarning("Box too small", "Drag a bigger box.")
             return
         self._finish((int(y0 / self.scale), int(x0 / self.scale),
                       int(y1 / self.scale), int(x1 / self.scale)))
@@ -403,7 +401,7 @@ class App(tk.Tk):
         url_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         setup_entry_clipboard(url_entry)
 
-        ttk.Label(frm, text="Save folder  (finished PDFs are added here; existing files are kept)").grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Label(frm, text="Save folder").grid(row=2, column=0, columnspan=2, sticky="w")
         self.out_var = tk.StringVar(value=default_output_dir())
         out_entry = ttk.Entry(frm, textvariable=self.out_var)
         out_entry.grid(row=3, column=0, sticky="ew")
@@ -414,7 +412,7 @@ class App(tk.Tk):
         self.generate_btn.grid(row=4, column=0, columnspan=2, sticky="ew", pady=12)
 
         # Prominent status line + progress bar (the main "what's happening" cue).
-        self.status_var = tk.StringVar(value="Ready — paste a URL and press Generate.")
+        self.status_var = tk.StringVar(value="Ready")
         self.status_label = tk.Label(frm, textvariable=self.status_var, anchor="w",
                                      font=("Segoe UI", 11, "bold"), fg="#868e96")
         self.status_label.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 2))
@@ -449,7 +447,6 @@ class App(tk.Tk):
         sys.stdout = _GuiLog(self)
         sys.stderr = _GuiLog(self)
 
-        print("Paste a YouTube URL and press Generate.")
         # Keep yt-dlp fresh: check PyPI in the background; a newer version is
         # picked up the next time the app starts.
         ytdlp_runtime.start_background_update(print)
@@ -506,7 +503,7 @@ class App(tk.Tk):
     def select_region(self, image_path):
         self._region_bounds = None
         self._region_event.clear()
-        self.set_status("👉 Your turn: in the pop-up, drag a box around the tab", "#e8590c")
+        self.set_status("👉 Drag a box around the tab in the pop-up", "#e8590c")
         self.after(0, lambda: self._open_region(image_path))
         self._region_event.wait()
         if self._region_bounds is None:
@@ -529,15 +526,13 @@ class App(tk.Tk):
     def _on_generate(self):
         url = self.url_var.get().strip()
         if not url:
-            messagebox.showwarning("Missing URL", "Please paste a YouTube URL first.")
+            messagebox.showwarning("Missing URL", "Paste a YouTube URL first.")
             return
         base = self.out_var.get().strip() or default_output_dir()
         if not _writable_dir(base):
             messagebox.showerror(
                 "Cannot write to the save folder",
-                "This folder is read-only or cannot be created:\n\n"
-                f"{base}\n\n"
-                "Click Browse... and choose another folder, for example Documents.")
+                f"Cannot write to:\n\n{base}\n\nPick another folder with Browse.")
             return
         self.clear_log()                 # wipe the previous run's messages
         self.set_progress(0)
@@ -553,16 +548,16 @@ class App(tk.Tk):
             os.makedirs(out_dir, exist_ok=True)
             clear_all(work)
 
-            self.set_status("⬇  Downloading and preparing the video…")
+            self.set_status("⬇  Downloading video…")
             self.set_progress(0)
             title = download(work, url, on_progress=self.set_progress)
 
             # select_region sets its own status + chime and blocks for the user.
             extract_tab(work, select_region=self.select_region)
 
-            self.set_status("🛠  Building your tab PDF…")
+            self.set_status("🛠  Building PDF…")
             self.set_progress(None)
-            print("Removing duplicate / blank / overlapping lines and building PDF...")
+            print("Removing duplicate, blank and overlapping lines...")
             make_pdf(work)
 
             # A unique name means we only ever ADD to out_dir, never overwrite.
@@ -582,7 +577,7 @@ class App(tk.Tk):
             msg = str(e)
             print("ERROR: " + msg)
             print(traceback.format_exc())
-            self.set_status("❌  Error — see details below", "#e03131")
+            self.set_status("❌  Error", "#e03131")
             self.set_progress(0)
             self.after(0, lambda m=msg: messagebox.showerror("Something went wrong", m))
         finally:
@@ -593,7 +588,7 @@ class App(tk.Tk):
         self.progress.stop()
         self.progress.config(mode="determinate")
         self.progress["value"] = 100
-        self.set_status("✅  Done!  Saved: " + os.path.basename(pdf_path), "#2f9e44")
+        self.set_status("✅  Saved: " + os.path.basename(pdf_path), "#2f9e44")
         try:
             if sys.platform == "win32":
                 os.startfile(pdf_path)
@@ -603,7 +598,7 @@ class App(tk.Tk):
                 subprocess.run(["xdg-open", pdf_path])
         except Exception:
             pass
-        messagebox.showinfo("Done", f"Your tab PDF is ready:\n\n{pdf_path}")
+        messagebox.showinfo("Done", f"Saved:\n\n{pdf_path}")
 
 
 def _selftest():
