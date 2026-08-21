@@ -564,7 +564,7 @@ class App(tk.Tk):
             final_pdf = unique_path(os.path.join(out_dir, safe_filename(title) + " tab.pdf"))
             shutil.copyfile(os.path.join(work, "output.pdf"), final_pdf)
 
-            print(f"Done! Saved: {final_pdf}")
+            print(f"Saved: {final_pdf}")
             self.after(0, lambda: self._finish_ok(final_pdf))
         except (ValueError, TimeoutError) as e:
             # Expected, understandable problems (too long, timed out, live, ...).
