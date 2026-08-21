@@ -43,6 +43,27 @@ macOS: run `GuitarTabParser.app`. If macOS blocks it, control-click the app and 
 - Push to `main`: dev builds (`GuitarTabParserDev`, with a Details log box) are uploaded as workflow artifacts.
 - Push a `v*` tag: release builds (`GuitarTabParser`, no log box; logs go to `last-run.log` in the app data folder) are built for macOS and Windows and attached to the GitHub release.
 
+Both wait on the English-only check below, so a build never ships if it fails.
+
+### English only
+
+Everything a user can see is English: GUI text, the README, and commit subjects, which the release workflow turns into release notes. `tools/check_english.py` enforces that. It fails on Korean in any tracked source or doc file, and on a Korean commit message.
+
+Run it yourself:
+
+```sh
+python tools/check_english.py                       # scan tracked files
+python tools/check_english.py --commit-msg FILE     # scan a commit message
+```
+
+To catch mistakes before they leave your machine, turn on the hooks once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+If a line truly needs Korean, put `allow-hangul` on it.
+
 ### yt-dlp updates
 
 YouTube changes often, and yt-dlp releases fixes just as often. A copy frozen into the app would go stale, so the app does not freeze it. The build ships yt-dlp as a wheel file. On first run the wheel is unpacked into the app data folder and loaded from there. On every start, a background check asks PyPI for a newer version and downloads it; the next start uses it.

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rejects a commit message written in Korean. Release notes are generated from
+# commit subjects, so a Korean subject ends up in front of users.
+#
+# Enable with:  git config core.hooksPath .githooks
+exec python tools/check_english.py --commit-msg "$1"

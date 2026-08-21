@@ -17,7 +17,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  english-only:
+    # Everything users can see -- GUI text, README, and the commit subjects
+    # that become release notes -- must be English. Builds wait on this so a
+    # Korean string cannot reach a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history to check the pushed commit subjects
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check tracked files
+        run: python tools/check_english.py
+
+      - name: Check commit messages new in this push
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # BEFORE is all zeros for a new branch or tag; in that case just
+          # check the tip commit.
+          if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            RANGE="HEAD~1..HEAD"
+            git cat-file -e "HEAD~1" 2>/dev/null || RANGE="HEAD"
+          else
+            RANGE="$BEFORE..HEAD"
+          fi
+          echo "Checking commits in $RANGE"
+          status=0
+          for sha in $(git rev-list "$RANGE"); do
+            git log -1 --format=%B "$sha" > /tmp/msg.txt
+            if ! python tools/check_english.py --commit-msg /tmp/msg.txt; then
+              echo "::error::Commit $sha has a Korean commit message."
+              status=1
+            fi
+          done
+          exit $status
+
   build:
+    needs: english-only
     strategy:
       fail-fast: false
       matrix:

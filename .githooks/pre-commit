@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rejects Korean in tracked source and docs before it can be committed.
+# CI runs the same check, so this only saves a round trip.
+#
+# Enable with:  git config core.hooksPath .githooks
+exec python tools/check_english.py

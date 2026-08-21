@@ -3,9 +3,9 @@ import cv2
 import numpy as np
 
 # OpenCV's cv2.imread / cv2.imwrite pass the path straight to the C++ layer,
-# which on Windows cannot handle non-ASCII paths (e.g. Korean characters such
-# as "바탕 화면/기타"). These wrappers do the file I/O in Python and only hand
-# raw bytes to OpenCV, so any Unicode path works. Use them instead of
+# which on Windows cannot handle non-ASCII paths (for example a Desktop folder
+# named in Korean). These wrappers do the file I/O in Python and only hand raw
+# bytes to OpenCV, so any Unicode path works. Use them instead of
 # cv2.imread / cv2.imwrite throughout the project.
 
 def imread(path, flags=cv2.IMREAD_COLOR):
