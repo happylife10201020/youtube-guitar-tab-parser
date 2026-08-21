@@ -10,4 +10,4 @@ matching git tag `v<version>` (e.g. v1.2.0). CI refuses to build a release
 whose tag does not match this file.
 """
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"

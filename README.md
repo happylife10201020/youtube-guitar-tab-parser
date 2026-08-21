@@ -14,7 +14,7 @@ macOS: run `GuitarTabParser.app`. If macOS blocks it, control-click the app and 
 
 1. Paste a YouTube URL and click Generate Tab PDF.
 2. A frame from the video appears. Drag a box around the tab area and click Confirm.
-3. The PDF opens when done. It is saved in a `tabs` folder next to the app, named after the video.
+3. The PDF opens when done. It is saved in a `tabs` folder next to the app, named after the video. If that folder is not writable (for example, macOS ran the app from a read-only copy), it goes to `~/Documents/GuitarTabParser/tabs` instead. You can pick any folder with Browse.
 
 | 1. Start | 2. Downloading |
 |---|---|

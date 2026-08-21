@@ -69,9 +69,32 @@ def app_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _writable_dir(path):
+    """True if `path` exists (or can be created) and we can write into it."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write-test")
+        with open(probe, "w"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
 def default_output_dir():
-    """Finished PDFs are collected in a `tabs` folder next to the app."""
-    return os.path.join(app_base_dir(), "tabs")
+    """Finished PDFs are collected in a `tabs` folder next to the app.
+
+    On macOS, Gatekeeper runs an unsigned app downloaded from the internet from
+    a random read-only copy ("App Translocation", a path under
+    /private/var/folders/.../AppTranslocation/). "Next to the app" is then not
+    writable, so fall back to ~/Documents/GuitarTabParser/tabs. The same
+    fallback covers a read-only install location on any platform.
+    """
+    preferred = os.path.join(app_base_dir(), "tabs")
+    if "/AppTranslocation/" not in preferred and _writable_dir(preferred):
+        return preferred
+    return os.path.join(os.path.expanduser("~"), "Documents", "GuitarTabParser", "tabs")
 
 
 def safe_filename(name):
@@ -409,6 +432,13 @@ class App(tk.Tk):
             messagebox.showwarning("Missing URL", "Please paste a YouTube URL first.")
             return
         base = self.out_var.get().strip() or default_output_dir()
+        if not _writable_dir(base):
+            messagebox.showerror(
+                "Cannot write to the save folder",
+                "This folder is read-only or cannot be created:\n\n"
+                f"{base}\n\n"
+                "Click Browse... and choose another folder, for example Documents.")
+            return
         self.clear_log()                 # wipe the previous run's messages
         self.set_progress(0)
         self.generate_btn.config(state="disabled", text="Working…")
