@@ -16,6 +16,19 @@ macOS: run `GuitarTabParser.app`. If macOS blocks it, control-click the app and 
 2. A frame from the video appears. Drag a box around the tab area and click Confirm.
 3. The PDF opens when done. It is saved in a `tabs` folder next to the app, named after the video. If that folder is not writable (for example, macOS ran the app from a read-only copy), it goes to `~/Documents/GuitarTabParser/tabs` instead. You can pick any folder with Browse.
 
+### Options
+
+Click Options to open two settings. Both are optional and off by default.
+
+- Song title: printed once at the top of the first page. Leave it empty for no title.
+- Line spacing: blank space between tab lines, 0-20 mm. Useful when you want room to write fingerings.
+
+### Updates
+
+The app checks GitHub for a newer release on startup and downloads it in the background. When it is ready, a "Restart to update" button appears at the bottom of the window; nothing is replaced until you click it. If the check or download fails, the app just carries on.
+
+Updating needs write access to where the app is installed. A macOS app still running from a read-only Gatekeeper copy will not update itself -- move it to Applications first.
+
 | 1. Start | 2. Downloading |
 |---|---|
 | ![Start](assets/screenshots/01-ready.png) | ![Downloading](assets/screenshots/02-downloading.png) |
@@ -30,7 +43,8 @@ macOS: run `GuitarTabParser.app`. If macOS blocks it, control-click the app and 
 - Crops every frame to the area you picked
 - Drops duplicate lines and blank frames
 - Trims measures that repeat between lines
-- Joins everything into an A4 PDF
+- Joins everything into an A4 PDF, with an optional title and line spacing
+- Keeps itself and its YouTube downloader up to date
 
 ## Development
 
@@ -112,6 +126,8 @@ python main.py "<youtube_url>" <output_dir>
 ```
 
 `--overlap <0-1>` sets how much of each line to trim as overlap. Leave it out to auto-detect; pass 0 to turn trimming off.
+
+`--title "<song name>"` prints a title on the first page, and `--line-spacing <mm>` adds blank space between lines -- the same two settings the GUI puts under Options.
 
 ## License
 

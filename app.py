@@ -33,7 +33,8 @@ from PIL import Image, ImageEnhance, ImageTk
 from clear_files import clear_all
 from download_frames import download
 from extract_tab_pics import extract_tab
-from clean_tab import make_pdf
+from clean_tab import make_pdf, mm_to_px
+import app_update
 import ytdlp_runtime
 from version import APP_VERSION
 
@@ -408,17 +409,27 @@ class App(tk.Tk):
         setup_entry_clipboard(out_entry)
         ttk.Button(frm, text="Browse...", command=self._browse).grid(row=3, column=1, sticky="e", padx=(8, 0))
 
+        # Extras live behind a disclosure toggle: the common case is paste-and-go,
+        # so the two rarely-changed settings start collapsed and out of the way.
+        self.options_open = False
+        self.options_btn = ttk.Button(frm, text="▸ Options",
+                                      command=self._toggle_options)
+        self.options_btn.grid(row=4, column=0, sticky="w", pady=(10, 0))
+        self.options_frame = self._build_options(frm)
+        self.options_frame.grid(row=5, column=0, columnspan=2, sticky="ew")
+        self.options_frame.grid_remove()
+
         self.generate_btn = ttk.Button(frm, text="Generate Tab PDF", command=self._on_generate)
-        self.generate_btn.grid(row=4, column=0, columnspan=2, sticky="ew", pady=12)
+        self.generate_btn.grid(row=6, column=0, columnspan=2, sticky="ew", pady=12)
 
         # Prominent status line + progress bar (the main "what's happening" cue).
         self.status_var = tk.StringVar(value="Ready")
         self.status_label = tk.Label(frm, textvariable=self.status_var, anchor="w",
                                      font=("Segoe UI", 11, "bold"), fg="#868e96")
-        self.status_label.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 2))
+        self.status_label.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 2))
 
         self.progress = ttk.Progressbar(frm, mode="determinate", maximum=100)
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        self.progress.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 10))
 
         # Detailed logs: a visible Details box in dev builds; a plain log file
         # (app-data folder) in release builds, so support questions can still be
@@ -432,13 +443,23 @@ class App(tk.Tk):
             except OSError:
                 pass
         else:
-            ttk.Label(frm, text="Details").grid(row=7, column=0, sticky="w")
+            ttk.Label(frm, text="Details").grid(row=9, column=0, sticky="w")
             self.log_text = tk.Text(frm, height=9, wrap="word", state="disabled")
-            self.log_text.grid(row=8, column=0, columnspan=2, sticky="nsew")
+            self.log_text.grid(row=10, column=0, columnspan=2, sticky="nsew")
             scroll = ttk.Scrollbar(frm, command=self.log_text.yview)
-            scroll.grid(row=8, column=2, sticky="ns")
+            scroll.grid(row=10, column=2, sticky="ns")
             self.log_text.configure(yscrollcommand=scroll.set)
-            frm.rowconfigure(8, weight=1)
+            frm.rowconfigure(10, weight=1)
+
+        # Appears only once a newer release has been downloaded and is ready.
+        self._pending_update = None
+        self.update_bar = ttk.Frame(frm)
+        self.update_bar.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.update_bar.grid_remove()
+        self.update_label = ttk.Label(self.update_bar, text="", foreground="#1c7ed6")
+        self.update_label.pack(side="left")
+        ttk.Button(self.update_bar, text="Restart to update",
+                   command=self._apply_update).pack(side="right")
 
         frm.columnconfigure(0, weight=1)
 
@@ -450,6 +471,80 @@ class App(tk.Tk):
         # Keep yt-dlp fresh: check PyPI in the background; a newer version is
         # picked up the next time the app starts.
         ytdlp_runtime.start_background_update(print)
+        # Same idea for the app itself, but only for release builds: a dev build
+        # must not be swapped for a release one behind the developer's back.
+        app_update.start_background_check(self._on_update_ready, log=print,
+                                          enabled=IS_RELEASE)
+
+    # ---- optional settings (collapsed by default) ----
+    def _build_options(self, parent):
+        box = ttk.Frame(parent, padding=(0, 8, 0, 0))
+
+        ttk.Label(box, text="Song title").grid(row=0, column=0, sticky="w")
+        self.song_title_var = tk.StringVar()
+        title_entry = ttk.Entry(box, textvariable=self.song_title_var)
+        title_entry.grid(row=1, column=0, columnspan=2, sticky="ew")
+        setup_entry_clipboard(title_entry)
+        ttk.Label(box, text="Printed at the top of the first page. Empty prints no title.",
+                  foreground="#868e96").grid(row=2, column=0, columnspan=2,
+                                             sticky="w", pady=(2, 10))
+
+        ttk.Label(box, text="Line spacing").grid(row=3, column=0, sticky="w")
+        self.spacing_var = tk.DoubleVar(value=0.0)
+        self.spacing_label = ttk.Label(box, text="0 mm", foreground="#868e96", width=6,
+                                       anchor="e")
+        self.spacing_label.grid(row=3, column=1, sticky="e")
+        scale = ttk.Scale(box, from_=0, to=20, variable=self.spacing_var,
+                          command=self._on_spacing)
+        scale.grid(row=4, column=0, columnspan=2, sticky="ew")
+        ttk.Label(box, text="Blank space added between tab lines.",
+                  foreground="#868e96").grid(row=5, column=0, columnspan=2,
+                                             sticky="w", pady=(2, 0))
+
+        box.columnconfigure(0, weight=1)
+        return box
+
+    def _on_spacing(self, _value=None):
+        self.spacing_label.config(text=f"{round(self.spacing_var.get())} mm")
+
+    def _toggle_options(self):
+        self.options_open = not self.options_open
+        if self.options_open:
+            self.options_frame.grid()
+            self.options_btn.config(text="▾ Options")
+        else:
+            self.options_frame.grid_remove()
+            self.options_btn.config(text="▸ Options")
+        self._fit_height()
+
+    def _fit_height(self):
+        """Grow or shrink the window so a toggled section is fully visible."""
+        self.update_idletasks()
+        width = self.winfo_width() or self.winfo_reqwidth()
+        self.geometry(f"{width}x{self.winfo_reqheight()}")
+
+    # ---- app self-update ----
+    def _on_update_ready(self, version, new_app_path):
+        """Called from the updater thread once the new version is on disk."""
+        def show():
+            self._pending_update = new_app_path
+            self.update_label.config(text=f"Version {version} is ready.")
+            self.update_bar.grid()
+            self._fit_height()
+        self.after(0, show)
+
+    def _apply_update(self):
+        if not self._pending_update:
+            return
+        if str(self.generate_btn["state"]) == "disabled" and not messagebox.askyesno(
+                "Restart now?", "A tab is still being built. Restart anyway?"):
+            return
+        try:
+            app_update.apply_update(self._pending_update, log=print)
+        except Exception as exc:
+            messagebox.showerror("Update failed", str(exc))
+            return
+        self.destroy()   # the helper waits for us to exit, then swaps and relaunches
 
     # ---- logging (safe from any thread) ----
     def append_log(self, msg):
@@ -537,9 +632,14 @@ class App(tk.Tk):
         self.clear_log()                 # wipe the previous run's messages
         self.set_progress(0)
         self.generate_btn.config(state="disabled", text="Working…")
-        threading.Thread(target=self._run, args=(url, base), daemon=True).start()
+        # Read the optional settings here, on the UI thread, so the worker never
+        # touches widgets.
+        song_title = self.song_title_var.get().strip() or None
+        line_gap = mm_to_px(self.spacing_var.get())
+        threading.Thread(target=self._run, args=(url, base, song_title, line_gap),
+                         daemon=True).start()
 
-    def _run(self, url, out_dir):
+    def _run(self, url, out_dir, song_title=None, line_gap=0):
         # All the messy intermediate files (video, frames, cropped images) go in a
         # throwaway system-temp folder -- never inside out_dir -- so the user's
         # existing files in out_dir are never cleared or touched.
@@ -558,7 +658,7 @@ class App(tk.Tk):
             self.set_status("🛠  Building PDF…")
             self.set_progress(None)
             print("Removing duplicate, blank and overlapping lines...")
-            make_pdf(work)
+            make_pdf(work, title=song_title, line_gap=line_gap)
 
             # A unique name means we only ever ADD to out_dir, never overwrite.
             final_pdf = unique_path(os.path.join(out_dir, safe_filename(title) + " tab.pdf"))

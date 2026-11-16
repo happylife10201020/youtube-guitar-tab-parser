@@ -1,8 +1,9 @@
 
 import os
+import sys
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from cv_io import imread
 
 # Every crop is scaled to this width before analysis so filters and comparisons
@@ -119,8 +120,72 @@ def _scaled(image_path, flag):
     h, w = img.shape[:2]
     return cv2.resize(img, (TARGET_WIDTH, int(h * TARGET_WIDTH / w)), interpolation=cv2.INTER_AREA)
 
-def _paginate(images, output_pdf_path):
-    """Stacks PIL images top-to-bottom onto A4 pages, starting a new page on overflow."""
+PAGE_DPI = 300        # the A4 page above is sized in pixels at this DPI
+
+def mm_to_px(millimetres):
+    """Millimetres on the printed page -> pixels in the rendered page image.
+
+    Line spacing is a physical distance to the user, so the UI and the CLI take
+    millimetres and convert here, where the page's DPI is defined.
+    """
+    return max(0, int(round((millimetres or 0) / 25.4 * PAGE_DPI)))
+
+# Title drawn at the top of the first page, in pixels at 300 DPI.
+TITLE_SIZE = 90       # roughly 22pt
+TITLE_GAP = 60        # blank space between the title and the first tab line
+
+# Fonts that can draw a song title, Korean included -- titles come from YouTube,
+# so ASCII-only fonts would turn them into boxes. First match wins; the bundled
+# Pillow default is the last resort and covers Latin only.
+_FONT_CANDIDATES = {
+    "darwin": ["/System/Library/Fonts/AppleSDGothicNeo.ttc",
+               "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+               "/Library/Fonts/Arial Unicode.ttf",
+               "/System/Library/Fonts/Helvetica.ttc"],
+    "win32": ["C:/Windows/Fonts/malgun.ttf",
+              "C:/Windows/Fonts/gulim.ttc",
+              "C:/Windows/Fonts/arial.ttf"],
+}
+_FONT_FALLBACKS = ["/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+
+def _load_font(size):
+    """Largest-coverage font available at `size`, or Pillow's default."""
+    for path in _FONT_CANDIDATES.get(sys.platform, []) + _FONT_FALLBACKS:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size)   # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
+
+def _text_size(draw, text, font):
+    """(width, height, top offset) of `text`, across Pillow versions."""
+    try:
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+        return right - left, bottom - top, top
+    except AttributeError:
+        width, height = draw.textsize(text, font=font)   # Pillow < 8
+        return width, height, 0
+
+def _draw_title(page, title, margin, content_width):
+    """Centers `title` at the top of `page`; returns the y to continue from."""
+    draw = ImageDraw.Draw(page)
+    font = _load_font(TITLE_SIZE)
+    width, height, top = _text_size(draw, title, font)
+    x = margin + max(0, (content_width - width) // 2)
+    draw.text((x, margin - top), title, fill="black", font=font)
+    return margin + height + TITLE_GAP
+
+def _paginate(images, output_pdf_path, title=None, line_gap=0):
+    """Stacks PIL images top-to-bottom onto A4 pages, starting a new page on overflow.
+
+    ``title``, when given, is printed once at the top of the first page.
+    ``line_gap`` is blank space (in 300-DPI pixels) inserted between lines; it
+    is never added above the first line on a page, so pages keep a flush top.
+    """
     A4_WIDTH, A4_HEIGHT = 2480, 3508  # A4 size in pixels at 300 DPI
     MARGIN = 100
     target_width = A4_WIDTH - 2 * MARGIN
@@ -130,8 +195,11 @@ def _paginate(images, output_pdf_path):
         return
 
     pages = []
-    current_height = MARGIN
     current_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white')
+    current_height = MARGIN
+    if title:
+        current_height = _draw_title(current_page, title, MARGIN, target_width)
+    first_on_page = True
 
     for img in images:
         # Scale to the page content width, keeping aspect ratio.
@@ -139,24 +207,29 @@ def _paginate(images, output_pdf_path):
             scale = target_width / img.width
             img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
 
-        if current_height + img.height > A4_HEIGHT - MARGIN:
+        gap = 0 if first_on_page else line_gap
+        if current_height + gap + img.height > A4_HEIGHT - MARGIN:
             pages.append(current_page)
             current_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white')
             current_height = MARGIN
+            gap = 0
 
-        current_page.paste(img, (MARGIN, current_height))
-        current_height += img.height
+        current_page.paste(img, (MARGIN, current_height + gap))
+        current_height += gap + img.height
+        first_on_page = False
 
     pages.append(current_page)
     pages[0].save(output_pdf_path, save_all=True, append_images=pages[1:])
 
-def images_to_pdf_a4(image_paths, output_pdf_path, left_crop_fraction=0.0):
+def images_to_pdf_a4(image_paths, output_pdf_path, left_crop_fraction=0.0,
+                     title=None, line_gap=0):
     """
     Loads tab-line images and stacks them vertically into an A4 PDF.
 
     ``left_crop_fraction`` trims that fraction off the left of every image except
     the first, removing measures a scrolling video repeats from the previous line
-    (see ``detect_overlap_fraction``).
+    (see ``detect_overlap_fraction``). ``title`` and ``line_gap`` are passed
+    through to ``_paginate``.
     """
     images = []
     for index, image_path in enumerate(image_paths):
@@ -167,7 +240,7 @@ def images_to_pdf_a4(image_paths, output_pdf_path, left_crop_fraction=0.0):
             cut = int(img.width * left_crop_fraction)
             img = img.crop((cut, 0, img.width, img.height))
         images.append(img)
-    _paginate(images, output_pdf_path)
+    _paginate(images, output_pdf_path, title=title, line_gap=line_gap)
 
 def horizontal_shift(prev_notation, cur_notation):
     """Pixels the tab scrolled left between two frames, plus a match confidence.
@@ -208,7 +281,7 @@ def is_scrolling(notations, min_fraction=0.5, max_samples=40):
                 scrolling += 1
     return tested > 0 and scrolling / tested >= min_fraction
 
-def make_scrolling_pdf(frames, output_pdf_path):
+def make_scrolling_pdf(frames, output_pdf_path, title=None, line_gap=0):
     """Stitches a continuously-scrolling tab into one long strip, then slices it
     into page-width lines. ``frames`` is a list of (path, notation, energy)."""
     paths = [f[0] for f in frames]
@@ -239,7 +312,7 @@ def make_scrolling_pdf(frames, output_pdf_path):
             pad = np.zeros((height, TARGET_WIDTH - segment.shape[1], 3), dtype=np.uint8)
             segment = np.hstack([segment, pad])
         lines.append(Image.fromarray(cv2.cvtColor(segment, cv2.COLOR_BGR2RGB)))
-    _paginate(lines, output_pdf_path)
+    _paginate(lines, output_pdf_path, title=title, line_gap=line_gap)
 
 def _notation_mse(a, b):
     """MSE between two notation images, zero-padded to a common height."""
@@ -267,7 +340,8 @@ def dedup_threshold(notations):
     floor = float(np.percentile(diffs, 40))
     return min(8000.0, max(400.0, floor * 4.0))
 
-def make_paged_pdf(frames, output_pdf_path, overlap_fraction):
+def make_paged_pdf(frames, output_pdf_path, overlap_fraction,
+                   title=None, line_gap=0):
     """De-duplicates page-style tab lines and compiles them into a PDF.
     ``frames`` is a list of (path, notation, energy)."""
     MIN_NOTATION_ENERGY = 0.03
@@ -298,9 +372,10 @@ def make_paged_pdf(frames, output_pdf_path, overlap_fraction):
     if overlap_fraction > 0:
         print(f"Trimming {overlap_fraction * 100:.0f}% overlap from the start of each line")
 
-    images_to_pdf_a4(use_files, output_pdf_path, left_crop_fraction=overlap_fraction)
+    images_to_pdf_a4(use_files, output_pdf_path, left_crop_fraction=overlap_fraction,
+                     title=title, line_gap=line_gap)
 
-def make_pdf(main_directory, overlap_fraction=None):
+def make_pdf(main_directory, overlap_fraction=None, title=None, line_gap=0):
     """
     Extracts the unique tablature from the cropped frames and compiles a PDF.
 
@@ -310,6 +385,8 @@ def make_pdf(main_directory, overlap_fraction=None):
 
     ``overlap_fraction`` only affects paged videos: ``None`` auto-detects the
     repeated overlap, ``0`` disables trimming, and a value in (0, 1) forces it.
+    ``title`` prints a heading on the first page; ``line_gap`` sets the blank
+    space between lines, in 300-DPI pixels.
     """
     directory = os.path.join(main_directory, "tabs")
     output_pdf_path = os.path.join(main_directory, 'output.pdf')
@@ -341,8 +418,9 @@ def make_pdf(main_directory, overlap_fraction=None):
 
     if is_scrolling([f[1] for f in frames]):
         print("Detected a continuously-scrolling tab; stitching frames into lines...")
-        make_scrolling_pdf(frames, output_pdf_path)
+        make_scrolling_pdf(frames, output_pdf_path, title=title, line_gap=line_gap)
     else:
-        make_paged_pdf(frames, output_pdf_path, overlap_fraction)
+        make_paged_pdf(frames, output_pdf_path, overlap_fraction,
+                       title=title, line_gap=line_gap)
 
     print(f"Output is at {output_pdf_path}")
