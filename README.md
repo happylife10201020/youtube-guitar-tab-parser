@@ -23,6 +23,8 @@ Click Options to open two settings. Both are optional and off by default.
 - Song title: printed once at the top of the first page. Leave it empty for no title.
 - Line spacing: blank space between tab lines, 0-20 mm. Useful when you want room to write fingerings.
 
+A small page preview next to the settings updates as you type or drag, and shows how many lines fit on the first page. Before a video is cropped it draws sample lines; after a crop it uses that video's real line height. A title too long for the page is shrunk to fit.
+
 ### Updates
 
 The app checks GitHub for a newer release on startup and downloads it in the background. When it is ready, a "Restart to update" button appears at the bottom of the window; nothing is replaced until you click it. If the check or download fails, the app just carries on.

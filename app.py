@@ -27,13 +27,15 @@ except ImportError:
     winsound = None
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageEnhance, ImageTk
 
 from clear_files import clear_all
 from download_frames import download
 from extract_tab_pics import extract_tab
-from clean_tab import make_pdf, mm_to_px
+from clean_tab import (make_pdf, mm_to_px, preview_first_page,
+                       A4_WIDTH, A4_HEIGHT, MARGIN, CONTENT_WIDTH)
 import app_update
 import ytdlp_runtime
 from version import APP_VERSION
@@ -377,6 +379,12 @@ class _GuiLog:
 
 
 class App(tk.Tk):
+    # Live page preview in the Options section: an A4 sheet drawn to scale.
+    PREVIEW_W = 170
+    PREVIEW_H = round(PREVIEW_W * A4_HEIGHT / A4_WIDTH)
+    # Height of one tab line (page pixels) assumed until a real crop is known.
+    SAMPLE_LINE_PX = 300
+
     def __init__(self):
         super().__init__()
         self.title(f"YouTube Guitar Tab Parser v{APP_VERSION}"
@@ -480,32 +488,97 @@ class App(tk.Tk):
     def _build_options(self, parent):
         box = ttk.Frame(parent, padding=(0, 8, 0, 0))
 
-        ttk.Label(box, text="Song title").grid(row=0, column=0, sticky="w")
+        controls = ttk.Frame(box)
+        controls.grid(row=0, column=0, sticky="new")
+
+        ttk.Label(controls, text="Song title").grid(row=0, column=0, sticky="w")
         self.song_title_var = tk.StringVar()
-        title_entry = ttk.Entry(box, textvariable=self.song_title_var)
+        title_entry = ttk.Entry(controls, textvariable=self.song_title_var)
         title_entry.grid(row=1, column=0, columnspan=2, sticky="ew")
         setup_entry_clipboard(title_entry)
-        ttk.Label(box, text="Printed at the top of the first page. Empty prints no title.",
+        ttk.Label(controls, text="Printed at the top of the first page.\n"
+                                 "Empty prints no title.",
                   foreground="#868e96").grid(row=2, column=0, columnspan=2,
                                              sticky="w", pady=(2, 10))
 
-        ttk.Label(box, text="Line spacing").grid(row=3, column=0, sticky="w")
+        ttk.Label(controls, text="Line spacing").grid(row=3, column=0, sticky="w")
         self.spacing_var = tk.DoubleVar(value=0.0)
-        self.spacing_label = ttk.Label(box, text="0 mm", foreground="#868e96", width=6,
-                                       anchor="e")
+        self.spacing_label = ttk.Label(controls, text="0 mm", foreground="#868e96",
+                                       width=6, anchor="e")
         self.spacing_label.grid(row=3, column=1, sticky="e")
-        scale = ttk.Scale(box, from_=0, to=20, variable=self.spacing_var,
+        scale = ttk.Scale(controls, from_=0, to=20, variable=self.spacing_var,
                           command=self._on_spacing)
         scale.grid(row=4, column=0, columnspan=2, sticky="ew")
-        ttk.Label(box, text="Blank space added between tab lines.",
+        ttk.Label(controls, text="Blank space added between tab lines.",
                   foreground="#868e96").grid(row=5, column=0, columnspan=2,
                                              sticky="w", pady=(2, 0))
+        controls.columnconfigure(0, weight=1)
+
+        # The preview shows the first page as the PDF will lay it out, so the
+        # two settings can be judged before a (slow) run instead of after it.
+        side = ttk.Frame(box)
+        side.grid(row=0, column=1, sticky="n", padx=(16, 0))
+        ttk.Label(side, text="Preview").pack(anchor="w")
+        self.preview = tk.Canvas(side, width=self.PREVIEW_W, height=self.PREVIEW_H,
+                                 bg="white", highlightthickness=1,
+                                 highlightbackground="#adb5bd")
+        self.preview.pack(pady=(2, 4))
+        self.preview_note = ttk.Label(side, text="", foreground="#868e96",
+                                      wraplength=self.PREVIEW_W, justify="left")
+        self.preview_note.pack(anchor="w")
+
+        family = tkfont.nametofont("TkDefaultFont").actual("family")
+        self._preview_font = tkfont.Font(family=family, size=-6)
+        self._sample_line_px = self.SAMPLE_LINE_PX
+        self._sample_from_crop = False
+        self.song_title_var.trace_add("write", self._draw_preview)
+        self._draw_preview()
 
         box.columnconfigure(0, weight=1)
         return box
 
     def _on_spacing(self, _value=None):
         self.spacing_label.config(text=f"{round(self.spacing_var.get())} mm")
+        self._draw_preview()
+
+    def _draw_preview(self, *_):
+        """Redraws the page thumbnail from the current title and spacing.
+
+        Positions come from clean_tab.preview_first_page, the same layout code
+        the PDF writer uses, scaled down to the thumbnail.
+        """
+        canvas = self.preview
+        canvas.delete("all")
+        k = self.PREVIEW_W / A4_WIDTH          # page pixels -> thumbnail pixels
+        title = self.song_title_var.get().strip() or None
+        line_px = self._sample_line_px
+        title_box, tops = preview_first_page(line_px, title,
+                                             mm_to_px(self.spacing_var.get()))
+
+        if title_box:
+            self._preview_font.configure(size=-max(4, round(title_box["size"] * k)))
+            canvas.create_text(self.PREVIEW_W / 2,
+                               (title_box["y"] + title_box["height"] / 2) * k,
+                               text=title, fill="#212529", font=self._preview_font)
+
+        left, right = MARGIN * k, (MARGIN + CONTENT_WIDTH) * k
+        for top in tops:
+            # A stand-in tab line: six strings in the middle of the line's box,
+            # with bar lines, the way a cropped line sits inside its own padding.
+            first = (top + line_px * 0.22) * k
+            last = (top + line_px * 0.78) * k
+            for string in range(6):
+                y = first + (last - first) * string / 5
+                canvas.create_line(left, y, right, y, fill="#495057")
+            for bar in range(5):
+                x = left + (right - left) * bar / 4
+                canvas.create_line(x, first, x, last, fill="#495057")
+
+        count = len(tops)
+        fits = f"{count} line{'' if count == 1 else 's'} fit on page 1."
+        basis = ("Height from your last crop." if self._sample_from_crop
+                 else "Sample line height.")
+        self.preview_note.config(text=f"{fits}\n{basis}")
 
     def _toggle_options(self):
         self.options_open = not self.options_open
@@ -610,6 +683,14 @@ class App(tk.Tk):
         RegionSelector(self, image_path, on_done=self._on_region_done)
 
     def _on_region_done(self, bounds):
+        if bounds:
+            # A real crop is now known, so the preview can use its true line
+            # height (every line is scaled to the page's content width).
+            y0, x0, y1, x1 = bounds
+            if x1 > x0 and y1 > y0:
+                self._sample_line_px = max(1, round((y1 - y0) * CONTENT_WIDTH / (x1 - x0)))
+                self._sample_from_crop = True
+                self._draw_preview()
         self._region_bounds = bounds
         self._region_event.set()
 

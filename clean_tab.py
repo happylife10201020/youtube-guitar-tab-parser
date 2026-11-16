@@ -1,4 +1,5 @@
 
+import functools
 import os
 import sys
 import cv2
@@ -130,8 +131,15 @@ def mm_to_px(millimetres):
     """
     return max(0, int(round((millimetres or 0) / 25.4 * PAGE_DPI)))
 
+# A4 at 300 DPI. Everything that places content on a page reads these, so the
+# PDF writer and the in-app preview cannot disagree about the page.
+A4_WIDTH, A4_HEIGHT = 2480, 3508
+MARGIN = 100
+CONTENT_WIDTH = A4_WIDTH - 2 * MARGIN
+
 # Title drawn at the top of the first page, in pixels at 300 DPI.
 TITLE_SIZE = 90       # roughly 22pt
+TITLE_MIN_SIZE = 40   # a long title shrinks down to this before it may clip
 TITLE_GAP = 60        # blank space between the title and the first tab line
 
 # Fonts that can draw a song title, Korean included -- titles come from YouTube,
@@ -149,6 +157,7 @@ _FONT_CANDIDATES = {
 _FONT_FALLBACKS = ["/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 
+@functools.lru_cache(maxsize=32)
 def _load_font(size):
     """Largest-coverage font available at `size`, or Pillow's default."""
     for path in _FONT_CANDIDATES.get(sys.platform, []) + _FONT_FALLBACKS:
@@ -170,55 +179,93 @@ def _text_size(draw, text, font):
         width, height = draw.textsize(text, font=font)   # Pillow < 8
         return width, height, 0
 
-def _draw_title(page, title, margin, content_width):
+_MEASURE = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+def _fit_title(title):
+    """(font, size, width, height, top offset) for `title`.
+
+    Starts at TITLE_SIZE and shrinks until the title fits the content width, so
+    a long title gets smaller instead of running off the right edge.
+    """
+    size = TITLE_SIZE
+    while True:
+        font = _load_font(size)
+        width, height, top = _text_size(_MEASURE, title, font)
+        if width <= CONTENT_WIDTH or size <= TITLE_MIN_SIZE:
+            return font, size, width, height, top
+        size -= 5
+
+def _draw_title(page, title):
     """Centers `title` at the top of `page`; returns the y to continue from."""
-    draw = ImageDraw.Draw(page)
-    font = _load_font(TITLE_SIZE)
-    width, height, top = _text_size(draw, title, font)
-    x = margin + max(0, (content_width - width) // 2)
-    draw.text((x, margin - top), title, fill="black", font=font)
-    return margin + height + TITLE_GAP
+    font, _size, width, height, top = _fit_title(title)
+    x = MARGIN + max(0, (CONTENT_WIDTH - width) // 2)
+    ImageDraw.Draw(page).text((x, MARGIN - top), title, fill="black", font=font)
+    return MARGIN + height + TITLE_GAP
+
+def place_lines(heights, first_top=MARGIN, line_gap=0):
+    """Where each line lands: one (page index, y) pair per height, in order.
+
+    ``first_top`` is where the first page's content starts (lower when a title
+    sits above it). ``line_gap`` is blank space between lines; it is never added
+    above the first line on a page, so pages keep a flush top. This is the single
+    source of truth for page layout -- the PDF writer and the preview both use it.
+    """
+    placed = []
+    page, y, first_on_page = 0, first_top, True
+    for height in heights:
+        gap = 0 if first_on_page else line_gap
+        if y + gap + height > A4_HEIGHT - MARGIN:
+            page, y, gap = page + 1, MARGIN, 0
+        placed.append((page, y + gap))
+        y += gap + height
+        first_on_page = False
+    return placed
+
+def preview_first_page(line_height, title=None, line_gap=0):
+    """Page 1 as the PDF would lay it out, for lines all ``line_height`` tall.
+
+    Returns ``(title_box, line_tops)``: ``title_box`` is None or a dict with the
+    title's font ``size``, ``y``, ``width`` and ``height``; ``line_tops`` holds
+    the y of every line that fits on the first page. All values are page pixels.
+    """
+    top, title_box = MARGIN, None
+    if title:
+        _font, size, width, height, _top = _fit_title(title)
+        title_box = {"size": size, "y": MARGIN, "width": width, "height": height}
+        top = MARGIN + height + TITLE_GAP
+    line_height = max(1, int(line_height))
+    capacity = (A4_HEIGHT - 2 * MARGIN) // line_height + 2
+    placed = place_lines([line_height] * capacity, first_top=top, line_gap=line_gap)
+    return title_box, [y for page, y in placed if page == 0]
 
 def _paginate(images, output_pdf_path, title=None, line_gap=0):
     """Stacks PIL images top-to-bottom onto A4 pages, starting a new page on overflow.
 
     ``title``, when given, is printed once at the top of the first page.
-    ``line_gap`` is blank space (in 300-DPI pixels) inserted between lines; it
-    is never added above the first line on a page, so pages keep a flush top.
+    ``line_gap`` is blank space (in 300-DPI pixels) inserted between lines; see
+    ``place_lines`` for the layout rules.
     """
-    A4_WIDTH, A4_HEIGHT = 2480, 3508  # A4 size in pixels at 300 DPI
-    MARGIN = 100
-    target_width = A4_WIDTH - 2 * MARGIN
-
     if not images:
         print("No images to generate PDF.")
         return
 
-    pages = []
-    current_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white')
-    current_height = MARGIN
-    if title:
-        current_height = _draw_title(current_page, title, MARGIN, target_width)
-    first_on_page = True
-
+    # Scale every line to the page content width, keeping aspect ratio.
+    scaled = []
     for img in images:
-        # Scale to the page content width, keeping aspect ratio.
-        if img.width != target_width:
-            scale = target_width / img.width
+        if img.width != CONTENT_WIDTH:
+            scale = CONTENT_WIDTH / img.width
             img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+        scaled.append(img)
 
-        gap = 0 if first_on_page else line_gap
-        if current_height + gap + img.height > A4_HEIGHT - MARGIN:
-            pages.append(current_page)
-            current_page = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white')
-            current_height = MARGIN
-            gap = 0
+    pages = [Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white')]
+    top = _draw_title(pages[0], title) if title else MARGIN
 
-        current_page.paste(img, (MARGIN, current_height + gap))
-        current_height += gap + img.height
-        first_on_page = False
+    positions = place_lines([img.height for img in scaled], first_top=top, line_gap=line_gap)
+    for img, (page_index, y) in zip(scaled, positions):
+        while len(pages) <= page_index:
+            pages.append(Image.new('RGB', (A4_WIDTH, A4_HEIGHT), 'white'))
+        pages[page_index].paste(img, (MARGIN, y))
 
-    pages.append(current_page)
     pages[0].save(output_pdf_path, save_all=True, append_images=pages[1:])
 
 def images_to_pdf_a4(image_paths, output_pdf_path, left_crop_fraction=0.0,
